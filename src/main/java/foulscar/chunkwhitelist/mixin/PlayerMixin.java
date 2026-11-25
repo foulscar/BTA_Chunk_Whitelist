@@ -14,7 +14,7 @@ public abstract class PlayerMixin {
 	private void chunkwhitelist$preventDroppingItemsInUnlistedChunks(boolean dropStack, CallbackInfo callback) {
 		Player player = (Player) (Object) this;
 		if (!player.world.isClientSide
-			&& !ChunkWhitelistStorage.isChunkWhitelistedAt(player.world, player.x, player.z)) {
+			&& !ChunkWhitelistStorage.isChunkAllowedAt(player.world, player.x, player.z)) {
 			if (player instanceof PlayerServer serverPlayer) {
 				serverPlayer.broadcastFullState(serverPlayer.containerMenu);
 			}

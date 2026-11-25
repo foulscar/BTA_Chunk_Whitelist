@@ -19,7 +19,7 @@ public abstract class PathFinderMixin {
 	private void chunkwhitelist$rejectNodesInUnlistedChunks(
 		Entity entity, int x, int y, int z, Node parent, int step, CallbackInfoReturnable<Node> callback) {
 		if (!entity.world.isClientSide
-			&& !ChunkWhitelistStorage.isChunkWhitelisted(entity.world, x >> 4, z >> 4)) {
+			&& !ChunkWhitelistStorage.isChunkAllowed(entity.world, x >> 4, z >> 4)) {
 			callback.setReturnValue(null);
 		}
 	}

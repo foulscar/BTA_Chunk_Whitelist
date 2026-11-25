@@ -18,6 +18,9 @@ public abstract class PlayerServerMixin {
 		if (callback.getReturnValue()) {
 			return;
 		}
+		if (!ChunkWhitelistStorage.isWhitelistEnabled(world)) {
+			return;
+		}
 
 		ChunkPos neighbor = new ChunkPos(pos.x, pos.z);
 		boolean hasUnloadedUnwhitelistedNeighbor = false;

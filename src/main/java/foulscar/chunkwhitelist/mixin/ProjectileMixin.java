@@ -58,7 +58,7 @@ public abstract class ProjectileMixin {
 				nextBoundaryZ += boundaryStepZ;
 			}
 
-			if (!ChunkWhitelistStorage.isChunkWhitelisted(projectile.world, chunkX, chunkZ)) {
+			if (!ChunkWhitelistStorage.isChunkAllowed(projectile.world, chunkX, chunkZ)) {
 				projectile.x = startX + 2.0 * movementX * collisionTime;
 				projectile.y = startY + 2.0 * movementY * collisionTime;
 				projectile.z = startZ + 2.0 * movementZ * collisionTime;

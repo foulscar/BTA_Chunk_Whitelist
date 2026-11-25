@@ -21,7 +21,7 @@ public abstract class PacketHandlerServerMixin {
 	@Inject(method = "handleMovePlayer", at = @At("HEAD"), cancellable = true)
 	private void chunkwhitelist$rejectMovementIntoUnlistedChunks(PacketMovePlayer packet, CallbackInfo callback) {
 		if (packet.hasPosition && !ChunkWhitelistStorage.canEnterUnwhitelistedChunks(playerEntity)
-			&& !ChunkWhitelistStorage.isChunkWhitelistedAt(
+			&& !ChunkWhitelistStorage.isChunkAllowedAt(
 			playerEntity.world, packet.x, packet.z)) {
 			chunkwhitelist$bouncePlayer(packet.x, packet.z);
 			callback.cancel();
@@ -33,8 +33,8 @@ public abstract class PacketHandlerServerMixin {
 		boolean droppingItem = packet.action == PacketPlayerAction.ACTION_DROP_ITEM_SINGLE
 			|| packet.action == PacketPlayerAction.ACTION_DROP_ITEM_STACK;
 		boolean whitelisted = droppingItem
-			? ChunkWhitelistStorage.isChunkWhitelistedAt(playerEntity.world, playerEntity.x, playerEntity.z)
-			: ChunkWhitelistStorage.isChunkWhitelisted(
+			? ChunkWhitelistStorage.isChunkAllowedAt(playerEntity.world, playerEntity.x, playerEntity.z)
+			: ChunkWhitelistStorage.isChunkAllowed(
 				playerEntity.world, packet.xPosition >> 4, packet.zPosition >> 4);
 		if (!whitelisted) {
 			if (!droppingItem) {
@@ -52,7 +52,7 @@ public abstract class PacketHandlerServerMixin {
 			case PacketUseOrPlaceItemStack.TYPE_USE_OR_PLACE_ON_TILE, PacketUseOrPlaceItemStack.TYPE_PLACE_ONLY ->
 				!chunkwhitelist$isBlockTargetWhitelisted(packet);
 			case PacketUseOrPlaceItemStack.TYPE_USE_ON_NOTHING ->
-				!ChunkWhitelistStorage.isChunkWhitelistedAt(playerEntity.world, playerEntity.x, playerEntity.z);
+				!ChunkWhitelistStorage.isChunkAllowedAt(playerEntity.world, playerEntity.x, playerEntity.z);
 			default -> true;
 		};
 		if (rejected) {
@@ -74,10 +74,10 @@ public abstract class PacketHandlerServerMixin {
 	}
 
 	private boolean chunkwhitelist$isBlockTargetWhitelisted(PacketUseOrPlaceItemStack packet) {
-		boolean targetChunkWhitelisted = ChunkWhitelistStorage.isChunkWhitelisted(
+		boolean targetChunkWhitelisted = ChunkWhitelistStorage.isChunkAllowed(
 			playerEntity.world, packet.xPosition >> 4, packet.zPosition >> 4);
 		boolean placementChunkWhitelisted = packet.direction == null
-			|| ChunkWhitelistStorage.isChunkWhitelisted(playerEntity.world,
+			|| ChunkWhitelistStorage.isChunkAllowed(playerEntity.world,
 				(packet.xPosition + packet.direction.offsetX()) >> 4,
 				(packet.zPosition + packet.direction.offsetZ()) >> 4);
 		return targetChunkWhitelisted && placementChunkWhitelisted;
@@ -91,9 +91,9 @@ public abstract class PacketHandlerServerMixin {
 		int targetChunkX = (int) Math.floor(targetX / 16.0);
 		int targetChunkZ = (int) Math.floor(targetZ / 16.0);
 		boolean bounceX = targetChunkX != currentChunkX
-			&& !ChunkWhitelistStorage.isChunkWhitelisted(playerEntity.world, targetChunkX, currentChunkZ);
+			&& !ChunkWhitelistStorage.isChunkAllowed(playerEntity.world, targetChunkX, currentChunkZ);
 		boolean bounceZ = targetChunkZ != currentChunkZ
-			&& !ChunkWhitelistStorage.isChunkWhitelisted(playerEntity.world, currentChunkX, targetChunkZ);
+			&& !ChunkWhitelistStorage.isChunkAllowed(playerEntity.world, currentChunkX, targetChunkZ);
 		if (!bounceX && !bounceZ) {
 			bounceX = xMovement != 0.0;
 			bounceZ = zMovement != 0.0;

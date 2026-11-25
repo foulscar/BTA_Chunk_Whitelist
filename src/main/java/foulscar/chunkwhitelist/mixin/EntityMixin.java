@@ -22,7 +22,7 @@ public abstract class EntityMixin {
 		double xMovement, double yMovement, double zMovement, CallbackInfo callback) {
 		if (world != null && !world.isClientSide
 			&& !ChunkWhitelistStorage.canEnterUnwhitelistedChunks((Entity) (Object) this)
-			&& !ChunkWhitelistStorage.isChunkWhitelistedAt(world, x + xMovement, z + zMovement)) {
+			&& !ChunkWhitelistStorage.isChunkAllowedAt(world, x + xMovement, z + zMovement)) {
 			Entity entity = (Entity) (Object) this;
 			chunkwhitelist$bounceFromUnlistedChunk(xMovement, zMovement);
 			chunkwhitelist$resetNavigation(entity);
@@ -34,7 +34,7 @@ public abstract class EntityMixin {
 	private void chunkwhitelist$preventPositionInUnlistedChunks(double x, double y, double z, CallbackInfo callback) {
 		if (world != null && !world.isClientSide
 			&& !ChunkWhitelistStorage.canEnterUnwhitelistedChunks((Entity) (Object) this)
-			&& !ChunkWhitelistStorage.isChunkWhitelistedAt(world, x, z)) {
+			&& !ChunkWhitelistStorage.isChunkAllowedAt(world, x, z)) {
 			callback.cancel();
 		}
 	}
@@ -44,7 +44,7 @@ public abstract class EntityMixin {
 		double x, double y, double z, float yaw, float pitch, CallbackInfo callback) {
 		if (world != null && !world.isClientSide
 			&& !ChunkWhitelistStorage.canEnterUnwhitelistedChunks((Entity) (Object) this)
-			&& !ChunkWhitelistStorage.isChunkWhitelistedAt(world, x, z)) {
+			&& !ChunkWhitelistStorage.isChunkAllowedAt(world, x, z)) {
 			callback.cancel();
 		}
 	}
@@ -58,8 +58,8 @@ public abstract class EntityMixin {
 			return;
 		}
 
-		boolean blockXMovement = !ChunkWhitelistStorage.isChunkWhitelistedAt(world, x + xMovement, z);
-		boolean blockZMovement = !ChunkWhitelistStorage.isChunkWhitelistedAt(world, x, z + zMovement);
+		boolean blockXMovement = !ChunkWhitelistStorage.isChunkAllowedAt(world, x + xMovement, z);
+		boolean blockZMovement = !ChunkWhitelistStorage.isChunkAllowedAt(world, x, z + zMovement);
 		if (!blockXMovement && !blockZMovement) {
 			blockXMovement = xMovement != 0.0;
 			blockZMovement = zMovement != 0.0;

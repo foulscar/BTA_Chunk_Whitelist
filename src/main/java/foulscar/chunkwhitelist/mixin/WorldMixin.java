@@ -17,7 +17,7 @@ public abstract class WorldMixin {
 	private void chunkwhitelist$rejectEntitiesInUnlistedChunks(Entity entity, CallbackInfoReturnable<Boolean> callback) {
 		World world = (World) (Object) this;
 		if (!world.isClientSide && !ChunkWhitelistStorage.canEnterUnwhitelistedChunks(entity)
-			&& !ChunkWhitelistStorage.isChunkWhitelistedAt(world, entity.x, entity.z)) {
+			&& !ChunkWhitelistStorage.isChunkAllowedAt(world, entity.x, entity.z)) {
 			callback.setReturnValue(false);
 		}
 	}
@@ -50,7 +50,7 @@ public abstract class WorldMixin {
 		TilePosc position, CallbackInfoReturnable<Boolean> callback) {
 		World world = (World) (Object) this;
 		if (!world.isClientSide
-			&& !ChunkWhitelistStorage.isChunkWhitelisted(world, position.x() >> 4, position.z() >> 4)) {
+			&& !ChunkWhitelistStorage.isChunkAllowed(world, position.x() >> 4, position.z() >> 4)) {
 			callback.setReturnValue(false);
 		}
 	}
