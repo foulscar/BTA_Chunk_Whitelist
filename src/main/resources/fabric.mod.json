@@ -5,7 +5,7 @@
 	"name": "Chunk Whitelist",
 	"description": "Restricts each dimension to explicitly whitelisted chunks.",
 	"authors": [
-		"Turnip Labs"
+		"foulscar"
 	],
 	"contact": {
 		"homepage": "",
