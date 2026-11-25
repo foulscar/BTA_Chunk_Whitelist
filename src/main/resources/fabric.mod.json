@@ -1,0 +1,33 @@
+{
+	"schemaVersion": 1,
+	"id": "chunkwhitelist",
+	"version": "${version}",
+	"name": "Chunk Whitelist",
+	"description": "Restricts each dimension to explicitly whitelisted chunks.",
+	"authors": [
+		"Turnip Labs"
+	],
+	"contact": {
+		"homepage": "",
+		"sources": ""
+	},
+	"icon": "icon.png",
+	"license": "CC0-1.0",
+	"environment": "server",
+	"entrypoints": {
+		"main": [
+			"foulscar.chunkwhitelist.ChunkWhitelist"
+		]
+	},
+	"mixins": [
+		"chunkwhitelist.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=${fabricloader}",
+		"minecraft": "*",
+		"java": ">=${java}"
+	},
+	"suggests": {
+		"modmenu": ">=${modmenu}"
+	}
+}

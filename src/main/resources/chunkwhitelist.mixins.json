@@ -1,0 +1,23 @@
+{
+  "required": true,
+  "package": "foulscar.chunkwhitelist.mixin",
+  "compatibilityLevel": "JAVA_${java}",
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "PlayerManagerAccessor",
+    "PlayerInstanceAccessor",
+    "MinecraftServerMixin",
+    "ChunkProviderServerMixin",
+    "PlayerServerMixin",
+    "WorldMixin",
+    "EntityMixin",
+    "MobPathfinderAccessor",
+    "PacketHandlerServerMixin",
+    "PathFinderMixin",
+    "ProjectileMixin",
+    "PlayerMixin"
+  ],
+  "client": []
+}
