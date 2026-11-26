@@ -1,22 +1,17 @@
 package foulscar.chunkwhitelist;
 
-import com.mojang.brigadier.LiteralMessage;
 import com.mojang.brigadier.arguments.ArgumentTypeInteger;
 import com.mojang.brigadier.builder.ArgumentBuilderLiteral;
 import com.mojang.brigadier.builder.ArgumentBuilderRequired;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import com.mojang.brigadier.suggestion.SuggestionsBuilder;
-import foulscar.chunkwhitelist.mixin.ChunkProviderServerAccessor;
 import foulscar.chunkwhitelist.mixin.PlayerInstanceAccessor;
 import foulscar.chunkwhitelist.mixin.PlayerManagerAccessor;
 import net.minecraft.core.net.command.CommandManager;
 import net.minecraft.core.net.command.CommandSource;
 import net.minecraft.core.world.World;
-import net.minecraft.core.world.chunk.Chunk;
 import net.minecraft.core.world.chunk.ChunkCoordinate;
 import net.minecraft.core.world.pos.ChunkPos;
-import net.minecraft.core.world.pos.TilePosc;
 import net.minecraft.server.entity.player.PlayerServer;
 import net.minecraft.server.net.PlayerHash;
 import net.minecraft.server.net.command.ServerCommandSource;
@@ -26,15 +21,12 @@ import net.minecraft.server.world.WorldServer;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.CompletableFuture;
 
 public final class ChunkWhitelistCommands {
+	private static final int MAX_RADIUS = 36;
+
 	private ChunkWhitelistCommands() {
 	}
 
@@ -44,63 +36,74 @@ public final class ChunkWhitelistCommands {
 				.then(createTeleportCommand().requires(CommandSource::hasAdmin))
 				.then(ArgumentBuilderLiteral.<CommandSource>literal("whitelist")
 					.executes(ChunkWhitelistCommands::showUsage)
-					.then(createWhitelistCommand("add", WhitelistAction.ADD).requires(CommandSource::hasAdmin))
-					.then(createWhitelistCommand("remove", WhitelistAction.REMOVE).requires(CommandSource::hasAdmin))
-					.then(createWhitelistToggleCommand("enable", true))
-					.then(createWhitelistToggleCommand("disable", false))
-					.then(ArgumentBuilderLiteral.<CommandSource>literal("status")
-						.then(createDimensionIdArgument()
-							.executes(ChunkWhitelistCommands::showWhitelistStatus)))
-					.then(ArgumentBuilderLiteral.<CommandSource>literal("list")
-						.executes(ChunkWhitelistCommands::listSubscribedWhitelistedChunks)))));
+					.then(createDimensionIdArgument()
+						.executes(ChunkWhitelistCommands::showWhitelistStatus)
+						.then(createWhitelistEditCommand("add", WhitelistEditAction.ADD))
+						.then(createWhitelistEditCommand("remove", WhitelistEditAction.REMOVE))
+						.then(createWhitelistToggleCommand("enable", true))
+						.then(createWhitelistToggleCommand("disable", false))
+						.then(ArgumentBuilderLiteral.<CommandSource>literal("status")
+							.executes(ChunkWhitelistCommands::showWhitelistStatus))
+						.then(ArgumentBuilderLiteral.<CommandSource>literal("list")
+							.executes(ChunkWhitelistCommands::listSubscribedWhitelistedChunks))))));
 	}
 
-	private static ArgumentBuilderLiteral<CommandSource> createWhitelistCommand(String name, WhitelistAction action) {
+	private static ArgumentBuilderLiteral<CommandSource> createWhitelistEditCommand(
+		String name, WhitelistEditAction action) {
 		return ArgumentBuilderLiteral.<CommandSource>literal(name)
-			.executes(context -> changeCurrentChunk(context, action))
-			.then(ArgumentBuilderRequired.<CommandSource, Integer>argument(
-					"chunkX", ArgumentTypeInteger.integer())
-				.suggests(action == WhitelistAction.ADD
-					? ChunkWhitelistCommands::suggestCurrentChunkX : ChunkWhitelistCommands::suggestWhitelistedChunkX)
+			.requires(CommandSource::hasAdmin)
+			.then(ArgumentBuilderLiteral.<CommandSource>literal("single")
+				.then(ArgumentBuilderRequired.<CommandSource, Integer>argument("x", ArgumentTypeInteger.integer())
+					.suggests(ChunkWhitelistCommandSuggestions::suggestCurrentChunkX)
+					.then(ArgumentBuilderRequired.<CommandSource, Integer>argument("z", ArgumentTypeInteger.integer())
+						.suggests(ChunkWhitelistCommandSuggestions::suggestCurrentChunkZ)
+						.executes(context -> changeSingleChunk(context, action)))))
+			.then(ArgumentBuilderLiteral.<CommandSource>literal("rect")
+				.then(ArgumentBuilderRequired.<CommandSource, Integer>argument("x1", ArgumentTypeInteger.integer())
+					.suggests(ChunkWhitelistCommandSuggestions::suggestCurrentChunkX)
+					.then(ArgumentBuilderRequired.<CommandSource, Integer>argument("z1", ArgumentTypeInteger.integer())
+						.suggests(ChunkWhitelistCommandSuggestions::suggestCurrentChunkZ)
+						.then(ArgumentBuilderRequired.<CommandSource, Integer>argument("x2", ArgumentTypeInteger.integer())
+							.suggests(ChunkWhitelistCommandSuggestions::suggestCurrentChunkX)
+							.then(ArgumentBuilderRequired.<CommandSource, Integer>argument("z2", ArgumentTypeInteger.integer())
+								.suggests(ChunkWhitelistCommandSuggestions::suggestCurrentChunkZ)
+								.executes(context -> changeRectangle(context, action)))))))
+			.then(ArgumentBuilderLiteral.<CommandSource>literal("radius")
 				.then(ArgumentBuilderRequired.<CommandSource, Integer>argument(
-						"chunkZ", ArgumentTypeInteger.integer())
-					.suggests(action == WhitelistAction.ADD
-						? ChunkWhitelistCommands::suggestCurrentChunkZ : ChunkWhitelistCommands::suggestWhitelistedChunkZ)
-					.executes(context -> changeChunkAtCoordinates(context, action))));
+						"radius", ArgumentTypeInteger.integer(0))
+					.executes(context -> changeRadius(context, action))));
 	}
 
 	private static ArgumentBuilderLiteral<CommandSource> createTeleportCommand() {
 		return ArgumentBuilderLiteral.<CommandSource>literal("tp")
 			.then(ArgumentBuilderRequired.<CommandSource, Integer>argument(
 					"chunkX", ArgumentTypeInteger.integer())
-				.suggests(ChunkWhitelistCommands::suggestWhitelistedChunkX)
+				.suggests(ChunkWhitelistCommandSuggestions::suggestWhitelistedChunkX)
 				.then(ArgumentBuilderRequired.<CommandSource, Integer>argument(
 						"chunkZ", ArgumentTypeInteger.integer())
-					.suggests(ChunkWhitelistCommands::suggestWhitelistedChunkZ)
+					.suggests(ChunkWhitelistCommandSuggestions::suggestWhitelistedChunkZ)
 					.executes(ChunkWhitelistCommands::teleportToChunk)));
 	}
 
 	private static ArgumentBuilderLiteral<CommandSource> createWhitelistToggleCommand(String name, boolean enabled) {
 		return ArgumentBuilderLiteral.<CommandSource>literal(name)
 			.requires(CommandSource::hasAdmin)
-			.then(createDimensionIdArgument()
-				.executes(context -> setWhitelistEnabled(context, enabled)));
+			.executes(context -> setWhitelistEnabled(context, enabled));
 	}
 
 	private static ArgumentBuilderRequired<CommandSource, Integer> createDimensionIdArgument() {
 		return ArgumentBuilderRequired.<CommandSource, Integer>argument("dimensionId", ArgumentTypeInteger.integer())
-			.suggests(ChunkWhitelistCommands::suggestDimensionIds);
+			.suggests(ChunkWhitelistCommandSuggestions::suggestDimensionIds);
 	}
 
 	private static int showUsage(CommandContext<CommandSource> context) {
 		context.getSource().sendMessage("Usage: /chunk tp <chunkX> <chunkZ>");
-		context.getSource().sendMessage("Usage: /chunk whitelist add [chunkX] [chunkZ]");
-		context.getSource().sendMessage("       /chunk whitelist remove [chunkX] [chunkZ]");
-		context.getSource().sendMessage("       /chunk whitelist enable|disable <dimensionId>");
-		context.getSource().sendMessage("       /chunk whitelist status <dimensionId>");
-		context.getSource().sendMessage("       /chunk whitelist list");
+		context.getSource().sendMessage("Usage: /chunk whitelist <dimensionId> add|remove single <x> <z>");
+		context.getSource().sendMessage("       /chunk whitelist <dimensionId> add|remove rect <x1> <z1> <x2> <z2>");
+		context.getSource().sendMessage("       /chunk whitelist <dimensionId> add|remove radius <number>");
+		context.getSource().sendMessage("       /chunk whitelist <dimensionId> enable|disable|status|list");
 		context.getSource().sendMessage(
-			"Without coordinates, the command uses your current chunk. Coordinate commands also work from the console.");
+			"Radius edits are centered on your current chunk and require you to be in that dimension.");
 		return 1;
 	}
 
@@ -141,13 +144,18 @@ public final class ChunkWhitelistCommands {
 		}
 
 		PlayerServer player = source.player;
-		World world = source.getWorld();
-		if (!(world instanceof WorldServer)) {
-			commandSource.sendMessage("Could not read the chunk whitelist for this dimension.");
+		int dimensionId = context.getArgument("dimensionId", Integer.class);
+		if (player.dimension != dimensionId) {
+			commandSource.sendMessage("You must be in dimension " + dimensionId + " to list its subscribed chunks.");
+			return 0;
+		}
+		WorldServer world = getLoadedDimension(source, dimensionId);
+		if (world == null) {
+			commandSource.sendMessage("Dimension " + dimensionId + " is not loaded.");
 			return 0;
 		}
 
-		PlayerManager playerManager = player.mcServer.playerList.getPlayerManager(player.dimension);
+		PlayerManager playerManager = player.mcServer.playerList.getPlayerManager(dimensionId);
 		if (playerManager == null) {
 			commandSource.sendMessage("Could not read the chunk subscriptions for this dimension.");
 			return 0;
@@ -162,7 +170,7 @@ public final class ChunkWhitelistCommands {
 			Comparator.comparingInt((ChunkCoordinate chunk) -> chunk.x).thenComparingInt(chunk -> chunk.z));
 		for (int chunkX = playerChunkX - viewRadius; chunkX <= playerChunkX + viewRadius; chunkX++) {
 			for (int chunkZ = playerChunkZ - viewRadius; chunkZ <= playerChunkZ + viewRadius; chunkZ++) {
-				long watcherKey = getChunkWatcherKey(chunkX, chunkZ);
+				long watcherKey = ChunkWhitelistChunkRefresher.getChunkWatcherKey(chunkX, chunkZ);
 				Object chunkWatcher = chunkWatchers.getValueByKey(watcherKey);
 				if (chunkWatcher != null
 					&& ((PlayerInstanceAccessor) chunkWatcher).chunkWhitelist$getPlayers().contains(player)
@@ -209,7 +217,7 @@ public final class ChunkWhitelistCommands {
 		}
 
 		if (changed) {
-			refreshLoadedChunksForWhitelistState(world, enabled);
+			ChunkWhitelistChunkRefresher.refreshLoadedChunksForWhitelistState(world, enabled);
 		}
 		commandSource.sendMessage("Chunk whitelist is " + (enabled ? "enabled" : "disabled")
 			+ " in dimension " + world.dimension.id + (changed ? "." : " (no change)."));
@@ -235,200 +243,117 @@ public final class ChunkWhitelistCommands {
 		return 1;
 	}
 
-	private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestDimensionIds(
-		CommandContext<CommandSource> context, SuggestionsBuilder builder) {
-		if (context.getSource() instanceof ServerCommandSource source) {
-			source.server.dimensionWorlds.int2ObjectEntrySet().forEach(entry ->
-				builder.suggest(entry.getIntKey(),
-					new LiteralMessage(entry.getValue().dimension.getTranslatedName())));
-		}
-		return builder.buildFuture();
+	private static int changeSingleChunk(CommandContext<CommandSource> context, WhitelistEditAction action) {
+		int chunkX = context.getArgument("x", Integer.class);
+		int chunkZ = context.getArgument("z", Integer.class);
+		return updateChunks(context, List.of(new ChunkPos(chunkX, chunkZ)), action);
 	}
 
-	private static void refreshLoadedChunksForWhitelistState(WorldServer world, boolean enabled) {
-		ChunkProviderServerAccessor provider = (ChunkProviderServerAccessor) world.getChunkProvider();
-		List<ChunkPos> chunksToRefresh = new ArrayList<>();
-		for (Chunk chunk : List.copyOf(provider.chunkwhitelist$getLoadedChunks())) {
-			boolean fakeChunk = chunk instanceof WhitelistEmptyChunk;
-			boolean shouldRefresh = enabled
-				? !fakeChunk && !ChunkWhitelistStorage.isChunkWhitelisted(world, chunk.pos)
-				: fakeChunk;
-			if (shouldRefresh) {
-				if (enabled && !fakeChunk) {
-					provider.chunkwhitelist$saveChunkToFile(chunk);
-					world.getChunkProvider().prepareChunk(new ChunkPos(chunk.pos), true);
-				}
-				chunksToRefresh.add(new ChunkPos(chunk.pos));
-			}
-		}
-		queueChunkRefresh(world, chunksToRefresh);
-	}
-
-	private static void queueChunkRefresh(WorldServer world, List<ChunkPos> chunksToRefresh) {
-		PlayerManager playerManager = world.mcServer.playerList.getPlayerManager(world.dimension.id);
-		if (playerManager == null || chunksToRefresh.isEmpty()) {
-			return;
-		}
-
-		PlayerManagerAccessor managerAccessor = (PlayerManagerAccessor) playerManager;
-		Map<PlayerServer, List<ChunkCoordinate>> playerChunks = new HashMap<>();
-		Map<PlayerServer, Set<Long>> playerChunkKeys = new HashMap<>();
-		for (ChunkPos chunk : chunksToRefresh) {
-			Object chunkWatcher = managerAccessor.chunkWhitelist$getPlayerInstances()
-				.getValueByKey(getChunkWatcherKey(chunk.x, chunk.z));
-			if (chunkWatcher == null) {
-				continue;
-			}
-
-			for (PlayerServer player : ((PlayerInstanceAccessor) chunkWatcher).chunkWhitelist$getPlayers()) {
-				List<ChunkCoordinate> chunks = playerChunks.computeIfAbsent(player, ignored -> new ArrayList<>());
-				Set<Long> chunkKeys = playerChunkKeys.computeIfAbsent(player, ignored -> new HashSet<>());
-				if (chunkKeys.add(getChunkWatcherKey(chunk.x, chunk.z))) {
-					chunks.add(new ChunkCoordinate(chunk.x, chunk.z));
-				}
-			}
-		}
-
-		for (Map.Entry<PlayerServer, List<ChunkCoordinate>> entry : playerChunks.entrySet()) {
-			PlayerServer player = entry.getKey();
-			List<ChunkCoordinate> chunks = entry.getValue();
-			int playerChunkX = (int) player.x >> 4;
-			int playerChunkZ = (int) player.z >> 4;
-			chunks.sort(Comparator
-				.comparingLong((ChunkCoordinate chunk) ->
-					Math.abs((long) chunk.x - playerChunkX) + Math.abs((long) chunk.z - playerChunkZ))
-				.thenComparingInt(chunk -> chunk.x)
-				.thenComparingInt(chunk -> chunk.z));
-
-			Set<Long> chunkKeys = playerChunkKeys.get(player);
-			player.loadedChunks.removeIf(queued -> chunkKeys.contains(getChunkWatcherKey(queued.x, queued.z)));
-			player.loadedChunks.addAll(0, chunks);
-		}
-	}
-
-	private static long getChunkWatcherKey(int chunkX, int chunkZ) {
-		return (((long) chunkZ + Integer.MAX_VALUE) << 32) | ((long) chunkX + Integer.MAX_VALUE);
-	}
-
-	private static int changeCurrentChunk(
-		CommandContext<CommandSource> context, WhitelistAction action) throws CommandSyntaxException {
-		ServerCommandSource source = (ServerCommandSource) context.getSource();
-		if (source.player == null) {
-			source.sendMessage("From the console, specify chunk coordinates: /chunk whitelist "
-				+ action.commandName + " <chunkX> <chunkZ>");
+	private static int changeRectangle(CommandContext<CommandSource> context, WhitelistEditAction action) {
+		int firstX = context.getArgument("x1", Integer.class);
+		int firstZ = context.getArgument("z1", Integer.class);
+		int secondX = context.getArgument("x2", Integer.class);
+		int secondZ = context.getArgument("z2", Integer.class);
+		long minX = Math.min(firstX, secondX);
+		long maxX = Math.max(firstX, secondX);
+		long minZ = Math.min(firstZ, secondZ);
+		long maxZ = Math.max(firstZ, secondZ);
+		long width = maxX - minX + 1;
+		long depth = maxZ - minZ + 1;
+		if (width > ChunkWhitelistStorage.MAX_CHUNK_UPDATES_PER_COMMAND
+			|| depth > ChunkWhitelistStorage.MAX_CHUNK_UPDATES_PER_COMMAND
+			|| width * depth > ChunkWhitelistStorage.MAX_CHUNK_UPDATES_PER_COMMAND) {
+			context.getSource().sendMessage("A whitelist command cannot change more than "
+				+ ChunkWhitelistStorage.MAX_CHUNK_UPDATES_PER_COMMAND + " chunks.");
 			return 0;
 		}
 
-		TilePosc blockPosition = source.getBlockCoordinates();
-		return changeChunkWhitelist(source, blockPosition.x() >> 4, blockPosition.z() >> 4, action);
+		List<ChunkPos> chunks = new ArrayList<>((int) (width * depth));
+		for (long chunkX = minX; chunkX <= maxX; chunkX++) {
+			for (long chunkZ = minZ; chunkZ <= maxZ; chunkZ++) {
+				chunks.add(new ChunkPos((int) chunkX, (int) chunkZ));
+			}
+		}
+		return updateChunks(context, chunks, action);
 	}
 
-	private static int changeChunkAtCoordinates(
-		CommandContext<CommandSource> context, WhitelistAction action) throws CommandSyntaxException {
-		ServerCommandSource source = (ServerCommandSource) context.getSource();
-		int chunkX = ArgumentTypeInteger.getInteger(context, "chunkX");
-		int chunkZ = ArgumentTypeInteger.getInteger(context, "chunkZ");
-		return changeChunkWhitelist(source, chunkX, chunkZ, action);
-	}
-
-	private static int changeChunkWhitelist(ServerCommandSource source, int chunkX, int chunkZ, WhitelistAction action) {
-		World sourceWorld = source.getWorld();
-		if (!(sourceWorld instanceof WorldServer world)) {
-			source.sendMessage("The chunk whitelist can only be changed on the server.");
+	private static int changeRadius(CommandContext<CommandSource> context, WhitelistEditAction action) {
+		int radius = context.getArgument("radius", Integer.class);
+		if (radius > MAX_RADIUS) {
+			context.getSource().sendMessage("Radius cannot exceed " + MAX_RADIUS
+				+ " chunks (maximum " + ChunkWhitelistStorage.MAX_CHUNK_UPDATES_PER_COMMAND
+				+ " chunks per command).");
+			return 0;
+		}
+		if (!(context.getSource() instanceof ServerCommandSource source) || source.player == null) {
+			context.getSource().sendMessage("Radius edits can only be used by a player in the target dimension.");
 			return 0;
 		}
 
-		boolean changed;
+		int dimensionId = context.getArgument("dimensionId", Integer.class);
+		if (source.player.dimension != dimensionId) {
+			context.getSource().sendMessage("You must be in dimension " + dimensionId + " to use a radius edit.");
+			return 0;
+		}
+
+		int centerX = (int) Math.floor(source.player.x / 16.0);
+		int centerZ = (int) Math.floor(source.player.z / 16.0);
+		long radiusSquared = (long) radius * radius;
+		List<ChunkPos> chunks = new ArrayList<>();
+		for (int offsetX = -radius; offsetX <= radius; offsetX++) {
+			for (int offsetZ = -radius; offsetZ <= radius; offsetZ++) {
+				if ((long) offsetX * offsetX + (long) offsetZ * offsetZ <= radiusSquared) {
+					chunks.add(new ChunkPos(centerX + offsetX, centerZ + offsetZ));
+				}
+			}
+		}
+		return updateChunks(context, chunks, action);
+	}
+
+	private static int updateChunks(
+		CommandContext<CommandSource> context, List<ChunkPos> chunks, WhitelistEditAction action) {
+		CommandSource commandSource = context.getSource();
+		if (!(commandSource instanceof ServerCommandSource source)) {
+			commandSource.sendMessage("The chunk whitelist can only be changed on the server.");
+			return 0;
+		}
+
+		int dimensionId = context.getArgument("dimensionId", Integer.class);
+		WorldServer world = getLoadedDimension(source, dimensionId);
+		if (world == null) {
+			commandSource.sendMessage("Dimension " + dimensionId + " is not loaded.");
+			return 0;
+		}
+
+		List<ChunkPos> changedChunks;
 		try {
-			changed = action == WhitelistAction.ADD
-				? ChunkWhitelistStorage.addChunk(world, chunkX, chunkZ)
-				: ChunkWhitelistStorage.removeChunk(world, chunkX, chunkZ);
+			changedChunks = action == WhitelistEditAction.ADD
+				? ChunkWhitelistStorage.addChunks(world, chunks)
+				: ChunkWhitelistStorage.removeChunks(world, chunks);
+		} catch (IllegalArgumentException exception) {
+			commandSource.sendMessage(exception.getMessage());
+			return 0;
 		} catch (IOException exception) {
-			ChunkWhitelist.LOGGER.error("Unable to save the chunk whitelist for dimension {}", world.dimension.id, exception);
-			source.sendMessage("Could not save the chunk whitelist. Check the server log for details.");
+			ChunkWhitelist.LOGGER.error("Unable to save the chunk whitelist for dimension {}",
+				world.dimension.id, exception);
+			commandSource.sendMessage("Could not save the chunk whitelist. Check the server log for details.");
 			return 0;
 		}
 
-		if (changed) {
-			world.getChunkProvider().prepareChunk(new ChunkPos(chunkX, chunkZ), true);
-			refreshPlayerChunkWatchers(world);
+		if (!changedChunks.isEmpty() && ChunkWhitelistStorage.isWhitelistEnabled(world)) {
+			ChunkWhitelistChunkRefresher.refreshChangedChunks(world, changedChunks);
 		}
-		String resultMessage = action == WhitelistAction.ADD
-			? (changed ? "Added " : "Already contains ")
-			: (changed ? "Removed " : "Does not contain ");
-		source.sendMessage(resultMessage + "chunk " + chunkX + " " + chunkZ + " in dimension " + world.dimension.id + ".");
+		commandSource.sendMessage((action == WhitelistEditAction.ADD ? "Added " : "Removed ") + changedChunks.size()
+			+ " chunks in dimension " + dimensionId + ".");
 		return 1;
 	}
 
-	private static void refreshPlayerChunkWatchers(WorldServer world) {
-		PlayerManager playerManager = world.mcServer.playerList.getPlayerManager(world.dimension.id);
-		if (playerManager == null) {
-			return;
-		}
-
-		for (PlayerServer player : List.copyOf(playerManager.players)) {
-			playerManager.removePlayer(player);
-			playerManager.addPlayer(player);
-		}
+	private static WorldServer getLoadedDimension(ServerCommandSource source, int dimensionId) {
+		return source.server.dimensionWorlds.get(dimensionId);
 	}
 
-	private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestCurrentChunkX(
-		CommandContext<CommandSource> context, SuggestionsBuilder builder) {
-		return suggestCurrentChunkCoordinate(context.getSource(), builder, true);
-	}
-
-	private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestCurrentChunkZ(
-		CommandContext<CommandSource> context, SuggestionsBuilder builder) {
-		return suggestCurrentChunkCoordinate(context.getSource(), builder, false);
-	}
-
-	private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestCurrentChunkCoordinate(
-		CommandSource source, SuggestionsBuilder builder, boolean xCoordinate) {
-		if (source instanceof ServerCommandSource serverSource && serverSource.player != null) {
-			TilePosc blockPosition = serverSource.getBlockCoordinates();
-			builder.suggest(xCoordinate ? blockPosition.x() >> 4 : blockPosition.z() >> 4,
-				new LiteralMessage(xCoordinate ? "Your current chunk X coordinate" : "Your current chunk Z coordinate"));
-		}
-		return builder.buildFuture();
-	}
-
-	private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestWhitelistedChunkX(
-		CommandContext<CommandSource> context, SuggestionsBuilder builder) {
-		World world = context.getSource().getWorld();
-		if (world instanceof WorldServer) {
-			TreeSet<Integer> chunkXs = new TreeSet<>();
-			for (ChunkPos chunkPos : ChunkWhitelistStorage.getWhitelistedChunkPositions(world)) {
-				chunkXs.add(chunkPos.x());
-			}
-			for (int chunkX : chunkXs) {
-				builder.suggest(chunkX, new LiteralMessage("Whitelisted chunk X coordinate"));
-			}
-		}
-		return builder.buildFuture();
-	}
-
-	private static CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestWhitelistedChunkZ(
-		CommandContext<CommandSource> context, SuggestionsBuilder builder) {
-		World world = context.getSource().getWorld();
-		if (world instanceof WorldServer) {
-			int chunkX = context.getArgument("chunkX", Integer.class);
-			for (ChunkPos chunkPos : ChunkWhitelistStorage.getWhitelistedChunkPositions(world)) {
-				if (chunkPos.x() == chunkX) {
-					builder.suggest(chunkPos.z(), new LiteralMessage("Whitelisted chunk Z coordinate"));
-				}
-			}
-		}
-		return builder.buildFuture();
-	}
-
-	private enum WhitelistAction {
-		ADD("add"),
-		REMOVE("remove");
-
-		private final String commandName;
-
-		WhitelistAction(String commandName) {
-			this.commandName = commandName;
-		}
+	private enum WhitelistEditAction {
+		ADD,
+		REMOVE
 	}
 }

@@ -6,17 +6,21 @@ Chunk Whitelist is a server-side BTA mod that restricts chunk generation, loadin
 
 ## Commands
 
-Run these commands in-game from the `/chunk` root:
 
 | Command | Description |
 | --- | --- |
 | `/chunk whitelist` | Show command usage. |
-| `/chunk whitelist add [chunkX] [chunkZ]` | Add the chunk you are standing in, or the specified chunk, to the whitelist. |
-| `/chunk whitelist remove [chunkX] [chunkZ]` | Remove the chunk you are standing in, or the specified chunk, from the whitelist. |
-| `/chunk whitelist enable <dimensionId>` | Enable the whitelist for the specified dimension. |
-| `/chunk whitelist disable <dimensionId>` | Disable the whitelist for the specified dimension. |
-| `/chunk whitelist status <dimensionId>` | Report the whitelist setting for the specified dimension. |
-| `/chunk whitelist list` | List subscribed whitelisted chunks. |
+| `/chunk whitelist <dimensionId>` | Report the whitelist setting for the specified dimension. |
+| `/chunk whitelist <dimensionId> add single <x> <z>` | Add one chunk to the dimension whitelist. |
+| `/chunk whitelist <dimensionId> add rect <x1> <z1> <x2> <z2>` | Add an inclusive rectangle of chunks. |
+| `/chunk whitelist <dimensionId> add radius <number>` | Add a circular area centered on your current chunk. |
+| `/chunk whitelist <dimensionId> remove single <x> <z>` | Remove one chunk from the dimension whitelist. |
+| `/chunk whitelist <dimensionId> remove rect <x1> <z1> <x2> <z2>` | Remove an inclusive rectangle of chunks. |
+| `/chunk whitelist <dimensionId> remove radius <number>` | Remove a circular area centered on your current chunk. |
+| `/chunk whitelist <dimensionId> enable` | Enable the whitelist for the specified dimension. |
+| `/chunk whitelist <dimensionId> disable` | Disable the whitelist for the specified dimension. |
+| `/chunk whitelist <dimensionId> status` | Report the whitelist setting for the specified dimension. |
+| `/chunk whitelist <dimensionId> list` | List subscribed whitelisted chunks in the specified dimension. |
 | `/chunk tp <chunkX> <chunkZ>` | Teleport to a chunk. |
 
 ## Data

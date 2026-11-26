@@ -1,7 +1,5 @@
 package foulscar.chunkwhitelist;
 
-import com.mojang.nbt.NbtIo;
-import com.mojang.nbt.tags.CompoundTag;
 import net.minecraft.core.entity.Entity;
 import net.minecraft.core.entity.player.Player;
 import net.minecraft.core.player.gamemode.Gamemodes;
@@ -13,16 +11,11 @@ import net.minecraft.server.world.WorldServer;
 import org.slf4j.Logger;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -34,10 +27,10 @@ import java.util.concurrent.ConcurrentMap;
 
 public final class ChunkWhitelistStorage {
 	private static final Logger LOGGER = ChunkWhitelist.LOGGER;
+	static final int MAX_CHUNK_UPDATES_PER_COMMAND = 4096;
 	private static final ConcurrentMap<Path, Set<Long>> WHITELISTED_CHUNKS_BY_FILE = new ConcurrentHashMap<>();
 	private static final ConcurrentMap<Path, Map<String, Boolean>> DIMENSION_SETTINGS_BY_FILE =
 		new ConcurrentHashMap<>();
-	private static final ConcurrentMap<World, Path> WHITELIST_FILES_BY_WORLD = new ConcurrentHashMap<>();
 
 	private ChunkWhitelistStorage() {
 	}
@@ -71,7 +64,7 @@ public final class ChunkWhitelistStorage {
 
 		Map<String, Boolean> updatedSettings = new HashMap<>(settings);
 		updatedSettings.put(dimensionKey(world), enabled);
-		writeDimensionSettings(settingsFile, updatedSettings);
+		ChunkWhitelistIO.writeDimensionSettings(settingsFile, updatedSettings);
 		DIMENSION_SETTINGS_BY_FILE.put(settingsFile, Map.copyOf(updatedSettings));
 		return true;
 	}
@@ -95,12 +88,12 @@ public final class ChunkWhitelistStorage {
 	public static synchronized void loadAllDimensionWhitelists(MinecraftServer server) {
 		WHITELISTED_CHUNKS_BY_FILE.clear();
 		DIMENSION_SETTINGS_BY_FILE.clear();
-		WHITELIST_FILES_BY_WORLD.clear();
+		ChunkWhitelistIO.clearWorldFileCache();
 		for (WorldServer world : server.dimensionWorlds.values()) {
 			try {
 				loadDimensionWhitelist(world);
 			} catch (IOException exception) {
-				Path whitelistFile = whitelistFileFor(world);
+				Path whitelistFile = ChunkWhitelistIO.whitelistFileFor(world);
 				LOGGER.error("Unable to initialize chunk whitelist file {}", whitelistFile, exception);
 				throw new UncheckedIOException("Unable to initialize chunk whitelist file " + whitelistFile, exception);
 			}
@@ -108,11 +101,11 @@ public final class ChunkWhitelistStorage {
 	}
 
 	private static void loadDimensionWhitelist(World world) throws IOException {
-		Path whitelistFile = whitelistFileFor(world);
+		Path whitelistFile = ChunkWhitelistIO.whitelistFileFor(world);
 		Set<Long> whitelistedChunks = Files.exists(whitelistFile)
-			? readWhitelistedChunks(whitelistFile) : new HashSet<>();
+			? ChunkWhitelistIO.readWhitelistedChunks(whitelistFile) : new HashSet<>();
 		if (whitelistedChunks.add(packChunkPosition(0, 0)) || !Files.exists(whitelistFile)) {
-			writeWhitelistedChunks(whitelistFile, whitelistedChunks);
+			ChunkWhitelistIO.writeWhitelistedChunks(whitelistFile, whitelistedChunks);
 		}
 		WHITELISTED_CHUNKS_BY_FILE.put(whitelistFile, Set.copyOf(whitelistedChunks));
 		boolean whitelistEnabled = initializeWhitelistSetting(world);
@@ -120,108 +113,72 @@ public final class ChunkWhitelistStorage {
 			whitelistedChunks.size(), world.dimension.id, whitelistFile, whitelistEnabled ? "enabled" : "disabled");
 	}
 
-	public static synchronized boolean addChunk(World world, int chunkX, int chunkZ) throws IOException {
-		Path whitelistFile = whitelistFileFor(world);
-		Set<Long> whitelistedChunks = new HashSet<>(getWhitelistedChunks(world));
-		if (!whitelistedChunks.add(packChunkPosition(chunkX, chunkZ))) {
-			return false;
-		}
-
-		writeWhitelistedChunks(whitelistFile, whitelistedChunks);
-		WHITELISTED_CHUNKS_BY_FILE.put(whitelistFile, Set.copyOf(whitelistedChunks));
-		return true;
+	public static synchronized List<ChunkPos> addChunks(World world, Collection<ChunkPos> chunkPositions)
+		throws IOException {
+		return updateChunks(world, chunkPositions, true);
 	}
 
-	public static synchronized boolean removeChunk(World world, int chunkX, int chunkZ) throws IOException {
-		Path whitelistFile = whitelistFileFor(world);
-		Set<Long> whitelistedChunks = new HashSet<>(getWhitelistedChunks(world));
-		if (!whitelistedChunks.remove(packChunkPosition(chunkX, chunkZ))) {
-			return false;
-		}
-
-		writeWhitelistedChunks(whitelistFile, whitelistedChunks);
-		WHITELISTED_CHUNKS_BY_FILE.put(whitelistFile, Set.copyOf(whitelistedChunks));
-		return true;
+	public static synchronized List<ChunkPos> removeChunks(World world, Collection<ChunkPos> chunkPositions)
+		throws IOException {
+		return updateChunks(world, chunkPositions, false);
 	}
 
-	public static List<ChunkPos> getWhitelistedChunkPositions(World world) {
-		List<ChunkPos> chunkPositions = new ArrayList<>();
-		for (long packedChunkPosition : new TreeSet<>(getWhitelistedChunks(world))) {
-			chunkPositions.add(new ChunkPos(unpackChunkX(packedChunkPosition), unpackChunkZ(packedChunkPosition)));
+	private static List<ChunkPos> updateChunks(
+		World world, Collection<ChunkPos> chunkPositions, boolean addChunks) throws IOException {
+		Path whitelistFile = ChunkWhitelistIO.whitelistFileFor(world);
+		Set<Long> updatedChunks = new HashSet<>(getWhitelistedChunks(world));
+		Set<Long> changedChunks = new HashSet<>();
+		for (ChunkPos chunk : chunkPositions) {
+			long packedPosition = packChunkPosition(chunk.x(), chunk.z());
+			boolean changed = addChunks
+				? updatedChunks.add(packedPosition)
+				: updatedChunks.remove(packedPosition);
+			if (changed) {
+				changedChunks.add(packedPosition);
+			}
 		}
-		return List.copyOf(chunkPositions);
+		if (changedChunks.isEmpty()) {
+			return List.of();
+		}
+		if (changedChunks.size() > MAX_CHUNK_UPDATES_PER_COMMAND) {
+			throw new IllegalArgumentException(
+				"A whitelist command cannot change more than " + MAX_CHUNK_UPDATES_PER_COMMAND + " chunks.");
+		}
+
+		ChunkWhitelistIO.writeWhitelistedChunks(whitelistFile, updatedChunks);
+		WHITELISTED_CHUNKS_BY_FILE.put(whitelistFile, Set.copyOf(updatedChunks));
+		List<ChunkPos> changedPositions = new ArrayList<>(changedChunks.size());
+		for (long packedPosition : changedChunks) {
+			changedPositions.add(new ChunkPos(unpackChunkX(packedPosition), unpackChunkZ(packedPosition)));
+		}
+		return List.copyOf(changedPositions);
 	}
 
-	private static void writeWhitelistedChunks(Path whitelistFile, Set<Long> whitelistedChunks) throws IOException {
-		List<String> lines = new ArrayList<>();
-		lines.add("chunk_x,chunk_z");
-		for (long packedChunkPosition : new TreeSet<>(whitelistedChunks)) {
-			lines.add(unpackChunkX(packedChunkPosition) + "," + unpackChunkZ(packedChunkPosition));
+	public static List<Integer> getWhitelistedChunkXCoordinates(World world) {
+		Set<Integer> chunkXs = new TreeSet<>();
+		for (long packedChunkPosition : getWhitelistedChunks(world)) {
+			chunkXs.add(unpackChunkX(packedChunkPosition));
 		}
+		return List.copyOf(chunkXs);
+	}
 
-		Path parent = whitelistFile.getParent();
-		if (parent != null) {
-			Files.createDirectories(parent);
+	public static List<Integer> getWhitelistedChunkZCoordinates(World world, int chunkX) {
+		Set<Integer> chunkZs = new TreeSet<>();
+		for (long packedChunkPosition : getWhitelistedChunks(world)) {
+			if (unpackChunkX(packedChunkPosition) == chunkX) {
+				chunkZs.add(unpackChunkZ(packedChunkPosition));
+			}
 		}
-		Files.write(whitelistFile, lines, StandardCharsets.UTF_8,
-			StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+		return List.copyOf(chunkZs);
 	}
 
 	private static Set<Long> getWhitelistedChunks(World world) {
-		Path whitelistFile = whitelistFileFor(world);
+		Path whitelistFile = ChunkWhitelistIO.whitelistFileFor(world);
 		return WHITELISTED_CHUNKS_BY_FILE.computeIfAbsent(whitelistFile, path -> {
 			if (Files.exists(path)) {
-				return Set.copyOf(readWhitelistedChunks(path));
+				return Set.copyOf(ChunkWhitelistIO.readWhitelistedChunks(path));
 			}
 			return Set.of(packChunkPosition(0, 0));
-		});
-	}
-
-	private static Set<Long> readWhitelistedChunks(Path whitelistFile) {
-		Set<Long> whitelistedChunks = new HashSet<>();
-		if (!Files.exists(whitelistFile)) {
-			return whitelistedChunks;
-		}
-
-		try {
-			List<String> lines = Files.readAllLines(whitelistFile, StandardCharsets.UTF_8);
-			for (int i = 0; i < lines.size(); i++) {
-				String line = lines.get(i).trim();
-				if (line.isEmpty() || line.startsWith("#")) {
-					continue;
-				}
-
-				String[] coordinates = line.split(",", -1);
-				try {
-					if (coordinates.length != 2) {
-						throw new NumberFormatException("expected two coordinates");
-					}
-					int chunkX = Integer.parseInt(coordinates[0].trim());
-					int chunkZ = Integer.parseInt(coordinates[1].trim());
-					whitelistedChunks.add(packChunkPosition(chunkX, chunkZ));
-				} catch (NumberFormatException exception) {
-					if (i == 0 && line.equalsIgnoreCase("chunk_x,chunk_z")) {
-						continue;
-					}
-					LOGGER.warn("Ignoring invalid chunk whitelist entry at {}:{}: {}",
-						whitelistFile, i + 1, line);
-				}
-			}
-		} catch (IOException exception) {
-			LOGGER.error("Unable to read chunk whitelist file {}", whitelistFile, exception);
-			throw new UncheckedIOException("Unable to read chunk whitelist file " + whitelistFile, exception);
-		}
-		return whitelistedChunks;
-	}
-
-	private static Path whitelistFileFor(World world) {
-		return WHITELIST_FILES_BY_WORLD.computeIfAbsent(world, key -> {
-			String whitelistFileName = key.dimension.id + ".csv";
-			return key.getLevelStorage().getDataFile("chunkwhitelist/" + whitelistFileName)
-				.toPath()
-				.resolveSibling(whitelistFileName)
-				.toAbsolutePath()
-				.normalize();
 		});
 	}
 
@@ -230,103 +187,39 @@ public final class ChunkWhitelistStorage {
 	}
 
 	private static Path dimensionSettingsFileFor(World world) {
-		return whitelistFileFor(world).resolveSibling("dimensions.dat");
+		return ChunkWhitelistIO.whitelistFileFor(world).resolveSibling("dimensions.dat");
 	}
 
 	private static Map<String, Boolean> getDimensionSettings(World world) {
 		Path settingsFile = dimensionSettingsFileFor(world);
 		return DIMENSION_SETTINGS_BY_FILE.computeIfAbsent(settingsFile,
-			path -> Map.copyOf(readDimensionSettings(path)));
-	}
-
-	private static Map<String, Boolean> readDimensionSettings(Path settingsFile) {
-		if (!Files.exists(settingsFile)) {
-			return Map.of();
-		}
-
-		try (InputStream input = Files.newInputStream(settingsFile)) {
-			CompoundTag root = NbtIo.readCompressed(input);
-			Map<String, Boolean> settings = new HashMap<>();
-			for (String key : root.getValue().keySet()) {
-				settings.put(key, root.getBoolean(key));
-			}
-			return settings;
-		} catch (IOException exception) {
-			LOGGER.error("Unable to read dimension whitelist settings {}", settingsFile, exception);
-			throw new UncheckedIOException("Unable to read dimension whitelist settings " + settingsFile, exception);
-		}
+			path -> Map.copyOf(ChunkWhitelistIO.readDimensionSettings(path)));
 	}
 
 	private static boolean initializeWhitelistSetting(World world) throws IOException {
 		Path settingsFile = dimensionSettingsFileFor(world);
 		Map<String, Boolean> settings = getDimensionSettings(world);
 		String key = dimensionKey(world);
-		Path legacyFile = whitelistFileFor(world).resolveSibling(key + ".enabled");
 		if (settings.containsKey(key)) {
-			Files.deleteIfExists(legacyFile);
 			return settings.get(key);
 		}
 
-		boolean enabled = readLegacyWhitelistSetting(legacyFile);
 		Map<String, Boolean> updatedSettings = new HashMap<>(settings);
-		updatedSettings.put(key, enabled);
-		writeDimensionSettings(settingsFile, updatedSettings);
+		updatedSettings.put(key, true);
+		ChunkWhitelistIO.writeDimensionSettings(settingsFile, updatedSettings);
 		DIMENSION_SETTINGS_BY_FILE.put(settingsFile, Map.copyOf(updatedSettings));
-		Files.deleteIfExists(legacyFile);
-		return enabled;
+		return true;
 	}
 
-	private static boolean readLegacyWhitelistSetting(Path legacyFile) throws IOException {
-		if (!Files.exists(legacyFile)) {
-			return true;
-		}
-
-		String value = Files.readString(legacyFile, StandardCharsets.UTF_8).trim();
-		if (value.equalsIgnoreCase("true")) {
-			return true;
-		}
-		if (value.equalsIgnoreCase("false")) {
-			return false;
-		}
-		throw new IOException("Invalid legacy whitelist setting in " + legacyFile + ": " + value);
-	}
-
-	private static void writeDimensionSettings(Path settingsFile, Map<String, Boolean> settings) throws IOException {
-		Path parent = settingsFile.getParent();
-		if (parent != null) {
-			Files.createDirectories(parent);
-		}
-
-		Path temporaryFile = settingsFile.resolveSibling(settingsFile.getFileName() + ".tmp");
-		CompoundTag root = new CompoundTag();
-		for (Map.Entry<String, Boolean> entry : settings.entrySet()) {
-			root.putBoolean(entry.getKey(), entry.getValue());
-		}
-		try {
-			try (OutputStream output = Files.newOutputStream(temporaryFile,
-				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
-				NbtIo.writeCompressed(root, output);
-			}
-			try {
-				Files.move(temporaryFile, settingsFile, StandardCopyOption.ATOMIC_MOVE,
-					StandardCopyOption.REPLACE_EXISTING);
-			} catch (AtomicMoveNotSupportedException exception) {
-				Files.move(temporaryFile, settingsFile, StandardCopyOption.REPLACE_EXISTING);
-			}
-		} finally {
-			Files.deleteIfExists(temporaryFile);
-		}
-	}
-
-	private static long packChunkPosition(int chunkX, int chunkZ) {
+	static long packChunkPosition(int chunkX, int chunkZ) {
 		return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
 	}
 
-	private static int unpackChunkX(long packedChunkPosition) {
+	static int unpackChunkX(long packedChunkPosition) {
 		return (int) (packedChunkPosition >> 32);
 	}
 
-	private static int unpackChunkZ(long packedChunkPosition) {
+	static int unpackChunkZ(long packedChunkPosition) {
 		return (int) packedChunkPosition;
 	}
 }
